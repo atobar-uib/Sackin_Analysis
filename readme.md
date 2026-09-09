@@ -100,10 +100,7 @@ Requiring the tuple to be nondecreasing ensures that each unordered collection o
 For each admissible leaf count $j$, the code stores the polynomial
 
 $$
-C_{j,k}(z)
-=
-\sum_{q\ge0}
-A_{j,k}\!\left(S_{\min}(j,k)+q\right)z^q.
+C_{j,k}(z)=\sum_{q\ge0}A_{j,k}\!\left(S_{\min}(j,k)+q\right)z^q.
 $$
 
 The coefficient at position $q$ counts shapes whose Sackin index exceeds the minimum by $q$. Storing relative increments avoids keeping the initial zero coefficients of an absolute-index polynomial.
