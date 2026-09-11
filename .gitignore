@@ -13,3 +13,4 @@ uv.lock
 old
 .python-version
 pyproject.toml
+src/
