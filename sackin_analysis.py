@@ -12,13 +12,12 @@ This module consolidates the two R scripts used for the computational section of
 * the empirical log-log regressions for the binary fitted Beta parameters;
 * publication-ready PDF figures and CSV/LaTeX exports.
 
-The counting implementation mirrors the numerical strategy of the R scripts:
-coefficients are stored as IEEE-754 doubles and theoretically integral
-coefficients are rounded after each DP state.  Direct convolution is used by
-default for numerical stability; FFT convolution remains available through the
---fft-threshold option.  Coefficients above 2**53 are not exact integer-valued
-doubles, although the relative frequencies remain numerically useful in the
-ranges studied in the manuscript.
+Multiplicity coefficients use Python arbitrary-precision integers, with exact
+polynomial convolution and checked integer division. Probabilities, moments,
+Beta fits and CDF comparisons are evaluated in floating point. Exact counting
+can be substantially slower than the former floating-point implementation.
+The fft_threshold arguments and --fft-threshold option are retained for API
+compatibility but are ignored: FFT convolution is never used.
 """
 
 from __future__ import annotations
@@ -35,7 +34,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from scipy.optimize import minimize
-from scipy.signal import fftconvolve
 from scipy.special import betaln, betainc, digamma
 
 DEFAULT_FFT_THRESHOLD = 1_000_000_000
@@ -112,27 +110,50 @@ def admissible_n_values(n_max: int, k: int, include_one: bool = False) -> List[i
 # Polynomial utilities
 # -----------------------------------------------------------------------------
 
+def integer_coefficients(values: np.ndarray) -> np.ndarray:
+    """Validate coefficients and promote fixed-width integers to Python ints."""
+    values = np.asarray(values, dtype=object)
+    if values.ndim != 1 or values.size == 0:
+        raise ValueError("Coefficient arrays must be nonempty and one-dimensional.")
+    result = np.empty(values.size, dtype=object)
+    for i, value in enumerate(values):
+        if not isinstance(value, (int, np.integer)):
+            raise TypeError("Coefficients must be integers, not floating-point values.")
+        if value < 0:
+            raise ValueError("Counting coefficients must be nonnegative.")
+        result[i] = int(value)
+    return result
+
+
 def poly_convolution(
     a: np.ndarray,
     b: np.ndarray,
     fft_threshold: int = DEFAULT_FFT_THRESHOLD,
 ) -> np.ndarray:
-    """Convolve coefficient vectors, switching to FFT for large products."""
-    a = np.asarray(a, dtype=float)
-    b = np.asarray(b, dtype=float)
-    if a.ndim != 1 or b.ndim != 1:
-        raise ValueError("Polynomial coefficient arrays must be one-dimensional.")
+    """Exact integer convolution; fft_threshold is ignored for compatibility."""
+    return np.convolve(integer_coefficients(a), integer_coefficients(b))
 
-    if a.size * b.size <= fft_threshold:
-        out = np.convolve(a, b)
-    else:
-        out = fftconvolve(a, b, mode="full")
 
-    if out.size:
-        scale = max(1.0, float(np.max(np.abs(out))))
-        mask = (out < 0.0) & (np.abs(out) < 1e-7 * scale)
-        out[mask] = 0.0
-    return np.asarray(out, dtype=float)
+def exact_divide(coefficients: np.ndarray, divisor: int) -> np.ndarray:
+    """Divide integer coefficients, rejecting any nonzero remainder."""
+    if not isinstance(divisor, (int, np.integer)) or divisor <= 0:
+        raise ValueError("The divisor must be a positive integer.")
+    coefficients = integer_coefficients(coefficients)
+    result = np.empty(coefficients.size, dtype=object)
+    for i, value in enumerate(coefficients):
+        quotient, remainder = divmod(value, int(divisor))
+        if remainder:
+            raise ArithmeticError(f"Coefficient {i} is not divisible by {divisor}.")
+        result[i] = quotient
+    return result
+
+
+def relative_probabilities(counts: np.ndarray) -> np.ndarray:
+    """Convert exact counts to float ratios without first converting the total."""
+    total = sum(counts, 0)
+    if total <= 0:
+        raise ValueError("The total count must be positive.")
+    return np.array([count / total for count in counts], dtype=float)
 
 
 def nondecreasing_k_tuples(total: int, k: int) -> Iterator[Tuple[int, ...]]:
@@ -170,35 +191,34 @@ def multiset_sackin_poly(
 
         m h_m = sum_{i=1}^m p_i h_{m-i}
 
-    is used, where p_i substitutes z -> z^i.
+    is used, where p_i substitutes z -> z^i. 
+
+    See https://math.berkeley.edu/~corteel/MATH249/macdonald.pdf#page=34
+    equation (2.11), page 23
     """
-    counts = np.asarray(counts, dtype=float)
+    counts = integer_coefficients(counts)
     r = int(r)
     if r < 0:
         raise ValueError("r must be non-negative.")
     if r == 0:
-        return np.array([1.0])
+        return np.array([1], dtype=object)
     if r == 1:
         return counts.copy()
 
     max_rel = counts.size - 1
-    h: List[np.ndarray] = [np.array([1.0])]
+    h: List[np.ndarray] = [np.array([1], dtype=object)]
 
     for m in range(1, r + 1):
-        acc = np.zeros(m * max_rel + 1, dtype=float)
+        acc = np.zeros(m * max_rel + 1, dtype=object)
         for i in range(1, m + 1):
-            p_i = np.zeros(i * max_rel + 1, dtype=float)
+            p_i = np.zeros(i * max_rel + 1, dtype=object)
             p_i[::i] = counts
             term = poly_convolution(p_i, h[m - i], fft_threshold)
             if term.size < acc.size:
                 term = np.pad(term, (0, acc.size - term.size))
             acc += term[: acc.size]
 
-        acc /= m
-        scale = max(1.0, float(np.max(np.abs(acc)))) if acc.size else 1.0
-        mask = (acc < 0.0) & (np.abs(acc) < 1e-7 * scale)
-        acc[mask] = 0.0
-        h.append(np.rint(acc))
+        h.append(exact_divide(acc, m))
 
     return h[r]
 
@@ -220,7 +240,7 @@ class BinarySackinDP:
     def __init__(self, fft_threshold: int = DEFAULT_FFT_THRESHOLD) -> None:
         self.fft_threshold = int(fft_threshold)
         self.dp: Dict[int, DPState] = {
-            1: DPState(0, 0, np.array([1.0], dtype=float))
+            1: DPState(0, 0, np.array([1], dtype=object))
         }
         self.max_built = 1
 
@@ -231,7 +251,7 @@ class BinarySackinDP:
         for N in range(self.max_built + 1, n + 1):
             min_n = sackin_min(N, 2)
             max_n = sackin_max(N, 2)
-            current = np.zeros(max_n - min_n + 1, dtype=float)
+            current = np.zeros(max_n - min_n + 1, dtype=object)
 
             for i in range(1, N // 2 + 1):
                 j = N - i
@@ -249,14 +269,12 @@ class BinarySackinDP:
                     )
                     diagonal = np.zeros_like(ordered)
                     diagonal[::2] = state_i.counts
-                    conv = (ordered + diagonal) / 2.0
+                    conv = exact_divide(ordered + diagonal, 2)
                     first_s = N + 2 * state_i.min_sackin
 
                 start = first_s - min_n
                 current[start : start + conv.size] += conv
 
-            current[current < 0.0] = 0.0
-            current = np.rint(current)
             self.dp[N] = DPState(min_n, max_n, current)
 
         self.max_built = n
@@ -268,12 +286,11 @@ class BinarySackinDP:
         self._extend_to(n)
         state = self.dp[n]
         values = np.arange(state.min_sackin, state.max_sackin + 1, dtype=int)
-        total = float(np.sum(state.counts))
         return pd.DataFrame(
             {
                 "Sackin": values,
                 "absolute_frequency": state.counts.copy(),
-                "relative_frequency": state.counts / total,
+                "relative_frequency": relative_probabilities(state.counts),
             }
         )
 
@@ -287,7 +304,7 @@ class KarySackinDP:
         self.k = int(k)
         self.fft_threshold = int(fft_threshold)
         self.dp: Dict[int, DPState] = {
-            1: DPState(0, 0, np.array([1.0], dtype=float))
+            1: DPState(0, 0, np.array([1], dtype=object))
         }
         self.max_p_built = 0
         self.multiset_cache: Dict[Tuple[int, int], np.ndarray] = {}
@@ -301,14 +318,14 @@ class KarySackinDP:
             N = 1 + p * (k - 1)
             min_n = sackin_min(N, k)
             max_n = sackin_max(N, k)
-            current = np.zeros(max_n - min_n + 1, dtype=float)
+            current = np.zeros(max_n - min_n + 1, dtype=object)
 
             # Q = (N-k)/(k-1) = p-1.
             for q_vec in nondecreasing_k_tuples(p - 1, k):
                 j_vec = tuple(1 + (k - 1) * q for q in q_vec)
                 size_table = Counter(j_vec)
 
-                subtree_poly = np.array([1.0])
+                subtree_poly = np.array([1], dtype=object)
                 min_subtree_sum = 0
 
                 for j, r in sorted(size_table.items()):
@@ -330,10 +347,6 @@ class KarySackinDP:
                 start = first_s - min_n
                 current[start : start + subtree_poly.size] += subtree_poly
 
-            scale = max(1.0, float(np.max(np.abs(current)))) if current.size else 1.0
-            mask = (current < 0.0) & (np.abs(current) < 1e-7 * scale)
-            current[mask] = 0.0
-            current = np.rint(current)
             self.dp[N] = DPState(min_n, max_n, current)
 
         self.max_p_built = p_target
@@ -352,7 +365,7 @@ class KarySackinDP:
             return pd.DataFrame(
                 {
                     "Sackin": [0],
-                    "absolute_frequency": [1.0],
+                    "absolute_frequency": np.array([1], dtype=object),
                     "relative_frequency": [1.0],
                 }
             )
@@ -366,13 +379,12 @@ class KarySackinDP:
         )
         indices = values - state.min_sackin
         counts = state.counts[indices]
-        total = float(np.sum(counts))
 
         return pd.DataFrame(
             {
                 "Sackin": values,
                 "absolute_frequency": counts.copy(),
-                "relative_frequency": counts / total,
+                "relative_frequency": relative_probabilities(counts),
             }
         )
 
@@ -443,8 +455,9 @@ def beta_fit(
     if analysis is None:
         analysis = SackinAnalysis()
 
+    # extract non-zero cases
     freq = analysis.frequencies(int(n), int(k)).copy()
-    freq = freq[freq["relative_frequency"] > 0].reset_index(drop=True)
+    freq = freq[freq["absolute_frequency"] > 0].reset_index(drop=True)
 
     min_s = int(freq["Sackin"].min())
     max_s = int(freq["Sackin"].max())
@@ -460,14 +473,15 @@ def beta_fit(
     interior = (x_full > 0.0) & (x_full < 1.0)
     x = x_full[interior]
     w_raw = p_full[interior]
-    extreme_mass = float(1.0 - np.sum(w_raw))
+    extreme_mass = float(np.sum(p_full[~interior]))
 
     if x.size < 2 or float(np.sum(w_raw)) <= 0.0:
         raise ValueError(
             f"Not enough interior Sackin values for n={n}, k={k} to fit a Beta distribution."
         )
-
+    # force area 1
     w = w_raw / np.sum(w_raw)
+    # compute mean and var
     mu_cond = float(np.sum(w * x))
     var_cond = float(np.sum(w * (x - mu_cond) ** 2))
     # All table moments and errors describe the same conditional fit target.
@@ -871,7 +885,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--fft-threshold",
         type=int,
         default=DEFAULT_FFT_THRESHOLD,
-        help="Switch to FFT convolution when len(a)*len(b) exceeds this value.",
+        help="Ignored compatibility option; counting always uses exact integer convolution.",
     )
 
     sub = parser.add_subparsers(dest="command", required=True)

@@ -6,10 +6,11 @@ This repository computes the distribution of the Sackin index on unlabelled, uno
 
 | File or directory | Purpose |
 |---|---|
-| `sackin_analysis_2.py` | Exact-integer implementation and command-line interface documented here |
-| `sackin_analysis.py` | Same implementation as sackin_analysis_2.py but with float arithmetic to accelerate computation |
+| `sackin_analysis.py` | Exact-integer implementation and command-line interface documented here |
+| `check_andres.py` | Independent total-count for unlabelled, unordered (non-plane), full k-ary rooted trees.   |
+| `compare_count.py` | check that the sum of obtained values coincides with the total number of trees |
 | `requirements.txt` | required packages |
-| `results_2/` | outputs of sackin_analysis_2.py used in the paper |
+| `results_2/` | outputs of sackin_analysis.py used in the paper |
 
 
 ## Installation
@@ -25,7 +26,7 @@ uv pip install -r requirements.txt
 Check that the script runs
 
 ```bash
-uv run sackin_analysis_2.py --help
+uv run sackin_analysis.py --help
 ```
 
 
@@ -33,13 +34,13 @@ uv run sackin_analysis_2.py --help
 
 ```bash
 # Print the exact distribution for binary trees with 10 leaves.
-uv run sackin_analysis_2.py frequencies --n 10
+uv run sackin_analysis.py frequencies --n 10
 
 # Fit a Beta distribution and print the diagnostics.
-uv run sackin_analysis_2.py fit --n 20
+uv run sackin_analysis.py fit --n 20
 
 # Save a density comparison figure.
-uv run sackin_analysis_2.py plot --n 20 --output results_2/sackin20.pdf
+uv run sackin_analysis.py plot --n 20 --output results_2/sackin20.pdf
 ```
 
 ## Command-line help
@@ -47,8 +48,8 @@ uv run sackin_analysis_2.py plot --n 20 --output results_2/sackin20.pdf
 Relative output paths are resolved from the current working directory.
 
 ```bash
-uv run sackin_analysis_2.py --help
-uv run sackin_analysis_2.py fit --help
+uv run sackin_analysis.py --help
+uv run sackin_analysis.py fit --help
 ```
 
 Every command supports `-h` or `--help`.
@@ -77,8 +78,8 @@ Every command supports `-h` or `--help`.
 ## 1. frequencies — exact counts and probabilities
 
 ```bash
-uv run sackin_analysis_2.py frequencies --n 10
-uv run sackin_analysis_2.py frequencies --n 21 --k 3 --output results/ternary_frequencies.csv
+uv run sackin_analysis.py frequencies --n 10
+uv run sackin_analysis.py frequencies --n 21 --k 3 --output results/ternary_frequencies.csv
 ```
 
 | Option | Required? | Default | Meaning |
@@ -98,8 +99,8 @@ Columns:
 ## 2. fit — Beta parameters and fit diagnostics
 
 ```bash
-uv run sackin_analysis_2.py fit --n 20 --k 2
-uv run sackin_analysis_2.py fit --n 21 --k 3 --cdf ternary_cdf.pdf
+uv run sackin_analysis.py fit --n 20 --k 2
+uv run sackin_analysis.py fit --n 21 --k 3 --cdf ternary_cdf.pdf
 ```
 
 | Option | Required? | Default | Meaning |
@@ -111,7 +112,7 @@ uv run sackin_analysis_2.py fit --n 21 --k 3 --cdf ternary_cdf.pdf
 Results are printed as JSON. There is no `--output` option for this command. To save the JSON, use shell redirection:
 
 ```bash
-uv run sackin_analysis_2.py fit --n 20 > fit_n20.json
+uv run sackin_analysis.py fit --n 20 > fit_n20.json
 ```
 
 If `--cdf` includes a directory, create that directory first: this command does not create it automatically.
@@ -138,7 +139,7 @@ Smaller CDF distances indicate closer agreement. The moment errors compare condi
 ## 3. plot — distribution and Beta density
 
 ```bash
-uv run sackin_analysis_2.py plot --n 20 --k 2 --output results/sackin20.pdf
+uv run sackin_analysis.py plot --n 20 --k 2 --output results/sackin20.pdf
 ```
 
 | Option | Required? | Default | Meaning |
@@ -154,7 +155,7 @@ The black curve shows the full exact probabilities divided by the normalized spa
 ## 4. binary-table — fixed binary size range
 
 ```bash
-uv run sackin_analysis_2.py binary-table --output results/binary.csv
+uv run sackin_analysis.py binary-table --output results/binary.csv
 ```
 
 | Option | Required? | Default |
@@ -168,7 +169,7 @@ The parser provides no option to change this leaf-count range.
 ## 5. higher-table — fixed internal-node count, varying k
 
 ```bash
-uv run sackin_analysis_2.py higher-table --p 10 --k-min 3 --k-max 5 --output results/higher.csv
+uv run sackin_analysis.py higher-table --p 10 --k-min 3 --k-max 5 --output results/higher.csv
 ```
 
 | Option | Required? | Default | Meaning |
@@ -183,7 +184,7 @@ It saves and prints a table containing `p`, `k`, `n`, fitted parameters, moments
 ## 6. grid — several p and k values
 
 ```bash
-uv run sackin_analysis_2.py grid --ps 10 20 --k-min 3 --k-max 5 --output results/grid.csv --max-output results/max_errors.csv
+uv run sackin_analysis.py grid --ps 10 20 --k-min 3 --k-max 5 --output results/grid.csv --max-output results/max_errors.csv
 ```
 
 | Option | Required? | Default | Meaning |
@@ -201,7 +202,7 @@ For each `p`, the summary reports `max_D`, `max_error_mu` and `max_error_var` ov
 ## 7. paper — complete configured manuscript output
 
 ```bash
-uv run sackin_analysis_2.py paper --output-dir results
+uv run sackin_analysis.py paper --output-dir results
 ```
 
 | Option | Required? | Default |
@@ -221,12 +222,23 @@ Creates the destination directory and generates:
 
 These ranges are fixed in the code. Exact enumeration can be expensive, particularly for the full grid and `paper` command.
 
-## Global compatibility option
 
-`--fft-threshold INTEGER` defaults to `1000000000`. It is accepted for compatibility but ignored: only used in sackin_analysis.py
+## Checking total tree counts
 
-If supplied, it belongs before the command:
+`compare_counts.py` compares the sum of Sackin multiplicities with a separately implemented Andres-based counting recurrence in `check_andres.py`. Comparisons use exact integers and raise an error if a mismatch occurs.
 
 ```bash
-uv run sackin_analysis.py --fft-threshold 1000000 frequencies --n 10
+# Default: k=2,...,10 and p=0,...,15.
+uv run compare_counts.py
+
+# Select branching degrees and the maximum internal-node count.
+uv run compare_counts.py --ks 3 4 5 --p-max 20
+
+# Display both counts for every case.
+uv run compare_counts.py --ks 4 --p-max 10 --verbose
 ```
+
+- `--ks`: branching degrees to check.
+- `--p-max`: maximum number of internal nodes, inclusive. The corresponding leaf count is `n = 1 + (k - 1) * p`.
+- `--verbose`: print each comparison.
+
